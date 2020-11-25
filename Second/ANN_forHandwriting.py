@@ -29,11 +29,11 @@ def file_path_list_concat(dir,dict,shuffle = True):
         random.shuffle(path_list)
     return path_list
 
-def file2_mat_label(path_list):
+def file2_mat_label(path_list,flat=False):
     count = len(path_list)
     count_from0 = 0
     rnum = 0
-    mat = np.zeros((count,1024))
+
     labels = np.zeros((1,count))
 
     for path, label in path_list:
@@ -41,12 +41,22 @@ def file2_mat_label(path_list):
         #一个数据读入mat
         with open(path) as lines:
             rnum = 0
-            for line in lines:
-                if rnum == 32 : break
-                line = line.strip()
-                for j in range(32):
-                    mat[count_from0,rnum*32+j] = int(line[j])
-                rnum += 1
+            if flat == True:
+                mat = np.zeros((count, 1024))
+                for line in lines:
+                    if rnum == 32 : break
+                    line = line.strip()
+                    for j in range(32):
+                        mat[count_from0,rnum*32+j] = int(line[j])
+                    rnum += 1
+            else:
+                for line in lines:
+                    mat = np.zeros((count,32,32))
+                    if rnum == 32 : break
+                    line = line.strip()
+                    for j in range(32):
+                        mat[count_from0, rnum, j] = int(line[j])
+                    rnum += 1
         count_from0 += 1
     #print(f"aaaaaaaaaaaaaaaaaaa{labels[0]}")
     return mat, labels
@@ -60,7 +70,7 @@ def file2_mat_label(path_list):
 
 
 
-def readdata(dir = 'C:\\Users\\hello\\Desktop\\MLBook\\Ch02\\digits\\trainingDigits',shuffle = True):
+def readdata(dir = 'C:\\Users\\hello\\Desktop\\MLBook\\Ch02\\digits\\trainingDigits',shuffle = True,flat=False):
     # 第一步解析数据文件路径
     # 读取数据的第二种方式
     dir_root = dir
@@ -72,13 +82,13 @@ def readdata(dir = 'C:\\Users\\hello\\Desktop\\MLBook\\Ch02\\digits\\trainingDig
     # pathlist：[(filepath1, class1),......(filepathn, classn)]
     path_list = file_path_list_concat(dir_root,label_num_dic,shuffle = True)
 
-    data_mat, label_list = file2_mat_label(path_list)
+    data_mat, label_list = file2_mat_label(path_list,flat=flat)
 
     return alldata_count, data_mat, label_list
 
 #以上是读取数据的部分
 
-alldata_count, data_mat, label_list = readdata()
+alldata_count, data_mat, label_list = readdata(flat=False)
 #print(data_mat.shape)
 #shape = (1934, 1024) = (alldata_count, 1024)
 #1664为128的整数倍，1个epoch可以运行13个iter
@@ -101,29 +111,31 @@ def to_onehot(label_list):
 onehot_label_list = np.array(to_onehot(label_list))
 
 #数据集划分，1664个训练数据，270个测试数据
-train_mat = data_mat[:1664,:]
+print(data_mat.shape)
+train_mat = data_mat[:1664,:,:]
+print(train_mat.shape)
 test_mat = data_mat[1664:,:]
 
 train_label_list = label_list[0,:1664]
 test_label_list = label_list[0,1664:]
 
-def data_loader(data_list, label_list,buffer_size = 128,label_size=270):
+def data_loader(data_list, label_list,buffer_size = 128,label_size=1664):
     def reader():
-        step_label = 0
-        while True:
-            if step_label >= label_size:
-                break
+        #step_label = 0
+        # while True:
+            # if step_label >= label_size:
+            #     break
 
-            for i in range(step_label,step_label+buffer_size):
-                yield data_list[i,:], int(label_list[i])
+        for i in range(label_size):
+            yield data_list[i,:,:], int(label_list[i])
 
             # print(data_list[i].shape, label_list[i].shape)
-            step_label += buffer_size
+            # step_label += buffer_size
     return reader
 
 
 reader = data_loader(train_mat,train_label_list)
-train_reader = fluid.io.batch(reader,batch_size=32)
+train_reader = fluid.io.batch(reader,batch_size=128)
 
 reader2 = data_loader(test_mat,test_label_list,buffer_size=10,label_size=270)
 test_reader = fluid.io.batch(reader2,batch_size=10)
@@ -137,7 +149,23 @@ def mul_perception(input):
     output = fluid.layers.fc(layer2,size=10,act="softmax")
     return output
 
-data = fluid.layers.data(name='data', shape=[1,1024],dtype='float32')
+
+def Conv_network(input):
+    layer1 = fluid.layers.conv2d(input=input,num_filters=128,filter_size=5)
+    layer2 = fluid.layers.pool2d(layer1,pool_size=2,pool_type="avg")
+    layer3 = fluid.layers.conv2d(input=layer2,num_filters=128,filter_size=5)
+    layer4 = fluid.layers.pool2d(layer3, pool_size=2, pool_type="avg")
+    layer5 = fluid.layers.conv2d(input=layer4,num_filters=32,filter_size=3)
+    #layer4 = fluid.layers.pool2d(layer3, pool_size=2, pool_type="avg")
+    layer6 = fluid.layers.flatten(layer5)
+    #layer6 = fluid.layers.fc(input=layer5, size=100, act="relu")
+    out = fluid.layers.fc(input=layer6,size=10,act="softmax")
+    return out
+
+#data = fluid.layers.data(name="conv_data",shape=[1,32,32],dtype="float32")
+#model = Conv_network(data)
+
+data = fluid.layers.data(name='data', shape=[1,32,32],dtype='float32')
 label = fluid.layers.data(name='label',shape=[1],dtype='int64')
 
 model = mul_perception(data)
@@ -145,7 +173,7 @@ cost = fluid.layers.cross_entropy(input=model,label=label)
 avg_cost = fluid.layers.mean(cost)
 acc = fluid.layers.accuracy(input=model,label=label)
 
-optimizer = fluid.optimizer.AdamOptimizer(learning_rate=0.001)
+optimizer = fluid.optimizer.AdamOptimizer(learning_rate=0.0001)
 opts = optimizer.minimize(avg_cost)
 
 place = fluid.CPUPlace()
@@ -153,16 +181,34 @@ exe = fluid.Executor(place)
 exe.run(fluid.default_startup_program())
 feeder = fluid.DataFeeder(place=place,feed_list=[data,label])
 
+import paddle
+
+train_gen = paddle.dataset.mnist.train()
+reader3 = fluid.io.batch(train_gen, batch_size=128)
 # 开始训练和测试
-for pass_id in range(10):
+for pass_id in range(100):
     # 进行训练
+
+    # for batch_id,data in enumerate(reader3()):
+    # batch_id 为int型数据，enumerate(reader3())出来为一个tuple, (data, label)
     for batch_id, data in enumerate(train_reader()):  # 遍历train_reader
+        # data里面含有128个sample，1个sample形状是(784维nparray数据，int类型label)
+        # 这个是为了处理mnist的数据，使784维数据转化成(28,28)
+        # for i in range(len(data)):
+        #     data[i] = (data[i][0].reshape(1,28,28), np.array(data[i][1],dtype="int64"))
+        # 试错代码，发现没用
+        # temp = data[0].reshape(1, 28, 28)
+        # temp1 = np.array([data[1]], dtype="int64")
+        # data = (temp,temp1)
+        print(f"batch_id:{batch_id}")
+        for i in range(len(data)):
+             data[i] = (data[i][0], np.array(data[i][1],dtype="int64"))
 
         train_cost, train_acc = exe.run(program=fluid.default_main_program(),  # 运行主程序
                                         feed=feeder.feed(data),  # 给模型喂入数据
                                         fetch_list=[avg_cost, acc])  # fetch 误差、准确率
         # 每100个batch打印一次信息  误差、准确率
-        if batch_id % 100 == 0:
+        if batch_id % 1 == 0:
             print('Pass:%d, Batch:%d, Cost:%0.5f, Accuracy:%0.5f' %
                   (pass_id, batch_id, train_cost[0], train_acc[0]))
 
